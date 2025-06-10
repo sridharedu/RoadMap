@@ -208,7 +208,7 @@ Absolutely! Here's a **refined and precise prompt** that ensures the AI **focuse
 
 ---
 
-### 🎯 Refined Prompt: Developer-Focused Backend Architecture Expansion
+### 🎯 TASK FOR YOU : Developer-Focused Backend Architecture Expansion
 
 > I have a backend system architecture tree that spans from client request flow to API Gateway, service discovery, Spring Boot microservices, controller/service/data layers, messaging systems, caching, observability, CI/CD, and security.
 >

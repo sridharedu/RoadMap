@@ -204,10 +204,44 @@ Apache Kafka / RabbitMQ / AWS SNS+SQS
 
 ---
 
-Would you like:
+Absolutely! Here's a **refined and precise prompt** that ensures the AI **focuses on developer-relevant areas**, avoids unnecessary infrastructure bloat, and emphasizes **where backend developers and architects actually spend their time**:
 
-* A **PDF version**?
-* A **Markdown/Notion-compatible version**?
-* A **diagram/infographic** of this full system?
+---
 
-I can prepare any or all of these formats to suit your revision or presentation needs.
+### 🎯 Refined Prompt: Developer-Focused Backend Architecture Expansion
+
+> I have a backend system architecture tree that spans from client request flow to API Gateway, service discovery, Spring Boot microservices, controller/service/data layers, messaging systems, caching, observability, CI/CD, and security.
+>
+> I want you to **expand and improve this architecture** with the following **strict guidelines**:
+>
+> 1. **Deeply branch only those areas where backend developers and backend architects focus daily**, such as:
+>
+>    * API design, authentication/authorization
+>    * Controller → service → repository layer flow
+>    * Data persistence (SQL/NoSQL, JPA patterns, transactions)
+>    * Event-driven design (Kafka, RabbitMQ, outbox pattern)
+>    * Testing, CI/CD, caching, resilience (Resilience4j), observability (logs, metrics, tracing)
+>    * Dev-friendly security (JWT, OAuth2, token rotation, RBAC)
+>
+> 2. Avoid or **minimize branching for infra-heavy or platform-managed concerns** like:
+>
+>    * DNS, Cloudflare, CDN, WAF, static asset delivery
+>    * Pod autoscaling, rolling updates, blue-green deployment
+>    * Low-level Kubernetes YAML, Terraform, or network ingress rules
+>
+> 3. Clearly annotate **each component** with:
+>
+>    * Common tools or libraries (e.g., Spring Security, Prometheus)
+>    * Key configuration properties or tunables (e.g., HikariCP pool size, Kafka partitioning)
+>    * Practical dev-side responsibilities (e.g., mocking Kafka in tests, using Testcontainers for DBs)
+>
+> 4. Structure the output as a **single expanded architecture tree**, with inline comments or annotations like a study/reference sheet.
+>
+> 5. This should serve as a **deep-dive knowledge map for senior Java backend engineers** preparing for interviews and system design — not an SRE or DevOps-heavy diagram.
+>
+> Keep it **dense and relevant**, avoid fluff, and limit expansion to where **developers need understanding, optimization, or decision-making ability**.
+
+---
+
+Would you like me to run this for you right away using your current architecture as base?
+

@@ -54,18 +54,34 @@ User: Web/Mobile Browser | External Client | Partner System
    v
 🚪 API GATEWAY (Spring Cloud Gateway / Kong / NGINX)
    |--> Authentication (JWT, OAuth2, OIDC)
+   |    *   JWT Details:
+   |        *   Tooling: Spring Security OAuth2 Resource Server, JJWT, Nimbus JOSE+JWT
+   |        *   Config: Access/Refresh token expiry (e.g., access: 15min, refresh: 7days), issuer, audience, signing keys (RSA/EC for asymmetric, HMAC for symmetric), JWKS URI
+   |        *   Dev Resp: Secure key management (Vault, KMS), token validation logic (signature, expiry, claims), implementing refresh token flow, handling SecurityContext population, blacklist compromised tokens (e.g., via Redis)
+   |    *   OAuth2/OIDC (e.g., with Keycloak, Okta, Auth0, Spring Authorization Server):
+   |        *   Flows: Authorization Code + PKCE (recommended for web/mobile apps), Client Credentials (for M2M), Password Grant (legacy, avoid if possible), Implicit (legacy, avoid)
+   |        *   Config: Client ID/Secret, scopes (e.g., openid, profile, email, custom_scope), redirect URIs, provider discovery endpoint (.well-known/openid-configuration)
+   |        *   Dev Resp: Handling callback, state parameter validation (CSRF protection), exchanging auth code for tokens, managing/validating scopes, storing tokens securely (e.g., HttpOnly cookies for web), ID token validation (nonce, issuer, audience)
    |--> Authorization (RBAC, ABAC via Spring Security)
-   |--> Rate Limiting (Redis Token Bucket / Leaky Bucket)
+   |    *   Tooling: Spring Security `@PreAuthorize`, `SecurityExpressionRoot`
+   |    *   Config: Role hierarchy, custom permission evaluators
+   |    *   Dev Resp: Defining roles/permissions, implementing custom `PermissionEvaluator` for ABAC, securing endpoints and methods
+   |--> Rate Limiting (Redis Token Bucket / Leaky Bucket, Resilience4j RateLimiter)
+   |    *   Tooling: Bucket4j, Spring Cloud Gateway RateLimiter filters
+   |    *   Config: Replenish rate, burst capacity, per-user/per-IP limits
+   |    *   Dev Resp: Defining rate limit strategies, handling 429 Too Many Requests
    |--> SSL Termination
    |--> CORS + Header Injection
-   |--> API Versioning (/v1/, /v2/)
+   |--> API Versioning (/v1/, /v2/, custom media types)
    |--> Request Transformation / URL Rewriting
-   |--> Request Logging / Correlation ID Injection
+   |--> Request Logging / Correlation ID Injection (e.g., using Spring Cloud Sleuth compatible headers)
    |
    v
-🧭 SERVICE DISCOVERY (Eureka / Consul / Zookeeper)
+🧭 SERVICE DISCOVERY (Eureka / Consul / Zookeeper / Kubernetes Service Discovery)
    |--> Dynamic registration/deregistration
-   |--> Lookup live service instances
+   |--> Lookup live service instances (client-side load balancing with Spring Cloud LoadBalancer)
+   |--> Config: Heartbeat interval, health check endpoints
+   |--> Dev Resp: Ensuring service registers correctly, configuring health checks
    |
    v
 🎯 TARGET MICROSERVICE (Spring Boot)
@@ -75,137 +91,243 @@ Containerized Microservice (e.g., OrderService / PaymentService)
    v
 🔐 SECURITY FILTER CHAIN
 Spring Security
-   |--> Pre-auth Filters (JWT validation, OAuth2 introspection)
-   |--> Load user from token into SecurityContext
-   |--> Method-level authorization checks
+   |--> Pre-auth Filters (JWT validation `BearerTokenAuthenticationFilter`, OAuth2 introspection `OAuth2IntrospectionAuthenticationFilter`)
+   |--> Load user from token into `SecurityContextHolder` via `AuthenticationProvider` or custom filter
+   |--> Method-level authorization checks (`@PreAuthorize`, `@PostAuthorize`, JSR-250 `@RolesAllowed`)
+   |--> Config: Filter order, custom entry points, access denied handlers
+   |--> Dev Resp: Configuring security rules, custom `UserDetailsService` if needed, ensuring proper exception handling (e.g., `AccessDeniedHandler`, `AuthenticationEntryPoint`)
    |
    v
 📦 DISPATCHER SERVLET
-   |--> Maps request to proper controller using Handler Mappings
+   |--> Maps request to proper controller using `HandlerMappings` (`RequestMappingHandlerMapping`)
+   |--> Invokes `HandlerAdapter` (`RequestMappingHandlerAdapter`)
    |
    v
-🎛 CONTROLLER LAYER (@RestController / GraphQL)
-   |--> Request binding (@RequestBody, @PathVariable)
-   |--> Input validation (@Valid, javax.validation.*)
-   |--> Calls service layer
+🎛 CONTROLLER LAYER (@RestController / GraphQL Controller)
+   |--> Request binding (@RequestBody, @PathVariable, @RequestParam, @RequestHeader, DTOs)
+   |    *   DTOs (Data Transfer Objects): Used for request/response payloads, separate from domain entities.
+   |        *   Tooling: Lombok for boilerplate reduction (`@Data`, `@Builder`)
+   |        *   Dev Resp: Designing DTOs, mapping DTOs to entities (see Service Layer)
+   |--> Input validation (@Valid, Bean Validation API - javax.validation.* / jakarta.validation.*)
+   |    *   Tooling: Hibernate Validator (default Spring Boot implementation)
+   |    *   Config: Custom constraint annotations, validator groups
+   |    *   Dev Resp: Annotating DTOs with validation constraints (e.g., `@NotNull`, `@Size`, `@Pattern`), creating custom validators, handling `MethodArgumentNotValidException`
+   |--> Global Error Handling (`@ControllerAdvice`, `@ExceptionHandler`)
+   |    *   Dev Resp: Implementing centralized exception handlers for common exceptions (e.g., `ConstraintViolationException`, custom business exceptions), returning standardized error responses
+   |--> Calls service layer, returns ResponseEntity<?> or GraphQL response
    |
    v
 🧠 SERVICE LAYER (@Service)
-   |--> Business Logic
-   |--> DTO ↔ Entity transformation (MapStruct / ModelMapper)
-   |--> Retry logic (@Retry, Resilience4j)
-   |--> Caching logic (Redis / Caffeine)
-   |--> Sync Call (FeignClient / WebClient)
-   |--> Async Event (Kafka, RabbitMQ, SQS)
-   |
-   |--> Can invoke:
-        - Saga orchestrator (Compensating Transaction Pattern)
-        - External Service (OAuth2 secured APIs)
-        - Internal Utility Classes
+   |--> Business Logic: Core application logic, orchestrates calls to repositories and other services.
+   |--> DTO ↔ Entity transformation
+   |    *   Tooling: MapStruct, ModelMapper, or custom mappers
+   |    *   Dev Resp: Defining mapping interfaces/classes, ensuring mapping correctness and performance, handling complex mappings (e.g., nested objects, collections)
+   |--> Transaction Management (@Transactional)
+   |    *   Tooling: Spring Data JPA, Spring JDBC
+   |    *   Config: Propagation levels (REQUIRED, REQUIRES_NEW, NESTED), isolation levels (READ_COMMITTED, SERIALIZABLE), rollback rules (`rollbackFor`, `noRollbackFor`), read-only transactions
+   |    *   Dev Resp: Applying `@Transactional` at appropriate service methods, understanding implications of propagation and isolation, ensuring data consistency, managing distributed transactions (e.g., Saga pattern if broker involved)
+   |--> Invoking other services/components:
+   |    *   Sync Call (OpenFeign / WebClient)
+   |        *   Tooling: OpenFeign for declarative REST clients, WebClient for reactive non-blocking calls
+   |        *   Config: Client timeouts (connect, read), retry mechanisms (see Resilience), error decoders (for Feign)
+   |        *   Dev Resp: Defining Feign interfaces, handling client-side errors, implementing fallbacks
+   |    *   Async Event Publishing (KafkaTemplate, RabbitTemplate)
+   |        *   Tooling: Spring Kafka (`KafkaTemplate`), Spring AMQP (`RabbitTemplate`)
+   |        *   Dev Resp: Sending messages to appropriate topics/exchanges, ensuring message format, handling send failures (see Outbox Pattern)
+   |    *   Saga orchestrator invocation (if applicable)
+   |    *   External Service (OAuth2 secured APIs using `OAuth2AuthorizedClientManager`)
+   |    *   Internal Utility Classes/Components
    |
    v
-💾 DATA ACCESS LAYER (DAO / Repository)
-   |--> Spring Data JPA / JDBC Template / MyBatis
-   |--> NoSQL: MongoDB, DynamoDB, Cassandra
-   |--> Connection Pool: HikariCP / c3p0
-   |--> Batch Operations, Pagination, Criteria Query
-   |--> @Transactional boundaries
+💾 DATA ACCESS LAYER (DAO / Repository - @Repository)
+   |--> Spring Data JPA / JDBC Template / MyBatis / jOOQ
+   |    *   JPA Patterns:
+   |        *   Repository pattern (e.g., `JpaRepository<Entity, ID>`)
+   |        *   Custom queries (`@Query`, Criteria API, QueryDSL)
+   |        *   Entity lifecycle management (`@PrePersist`, `@PostUpdate`)
+   |        *   Optimistic locking (`@Version`), Pessimistic locking
+   |        *   Dev Resp: Defining entities and repositories, writing efficient queries, managing entity relationships (`@OneToMany`, `@ManyToOne`), understanding lazy vs. eager fetching.
+   |--> NoSQL: Spring Data MongoDB, Spring Data Cassandra, etc.
+   |    *   Dev Resp: Data modeling for NoSQL (denormalization, indexing), choosing appropriate consistency levels.
+   |--> Connection Pooling
+   |    *   Tooling: HikariCP (default in Spring Boot), C3P0, Tomcat JDBC Pool
+   |    *   Config: `spring.datasource.hikari.*` (maxPoolSize, minIdle, connectionTimeout, idleTimeout, maxLifetime)
+   |    *   Dev Resp: Tuning pool parameters based on load, monitoring pool usage.
+   |--> Batch Operations
+   |    *   Tooling: Spring Data JPA `saveAll()`, JDBC batch updates, Spring Batch for complex ETL.
+   |    *   Dev Resp: Implementing batch inserts/updates for performance, handling batch failures.
+   |--> @Transactional boundaries (often managed at Service layer, but can be here for specific DAO methods if needed)
    |
    v
 🧱 DATABASE
-   |--> SQL: PostgreSQL / MySQL / Oracle
-   |--> NoSQL: MongoDB, Cassandra
-   |--> Time-series: InfluxDB
+   |--> SQL: PostgreSQL / MySQL / Oracle / SQL Server
+   |--> NoSQL: MongoDB, Cassandra, Couchbase
+   |--> Time-series: InfluxDB, Prometheus (for metrics)
    |--> Graph DB: Neo4j
+   |--> Schema Migration Tools
+   |    *   Tooling: Flyway, Liquibase
+   |    *   Config: Migration scripts location (`db/migration` for Flyway), versioning strategy
+   |    *   Dev Resp: Writing SQL/XML migration scripts, ensuring backward compatibility, testing migrations, managing baseline versions.
    |
    v
-📤 OUTBOX PATTERN (Async Safety)
-   |--> Write to "outbox" table in same transaction
-   |--> Poller publishes events to Kafka/RabbitMQ post commit
+📤 OUTBOX PATTERN (Async Safety for Event Publishing)
+   |--> Write to "outbox" table in same application DB transaction as business data
+   |    *   Dev Resp: Designing outbox table (event_id, topic, payload, status), ensuring dual write atomicity.
+   |--> Poller (Debezium / Custom Spring @Scheduled task / Kafka Connect)
+   |    *   Tooling: Debezium for CDC, custom poller with JDBC
+   |    *   Config: Polling interval, batch size for poller
+   |    *   Dev Resp: Implementing reliable poller, ensuring events are published at-least-once, marking events as published/processed in outbox table.
+   |--> Publishes events to Kafka/RabbitMQ post DB commit
    |
    v
 📬 EVENT BROKER
-Apache Kafka / RabbitMQ / AWS SNS+SQS
-   |--> Event-driven architecture
-   |--> Multiple subscribers (BillingService, InventoryService)
-   |--> Guaranteed delivery, durability
-   |--> Supports schema registry (Avro/JSON Protobuf)
+   |--> Apache Kafka
+   |    *   Key Concepts: Topics, Partitions (for parallelism & ordering within partition), Consumer Groups (for parallel consumption), Offsets, Brokers, Zookeeper/KRaft (for cluster coordination)
+   |    *   Schema Registry (e.g., Confluent Schema Registry)
+   |        *   Tooling: Avro, Protobuf, JSON Schema
+   |        *   Dev Resp: Defining schemas, managing schema evolution (backward/forward compatibility), using schema registry client for serialization/deserialization.
+   |    *   Config: Replication factor, partition count, retention policies, log compaction
+   |    *   Dev Resp: Choosing partition keys, designing topics, configuring producers (acks, retries, idempotence) and consumers (group.id, auto.offset.reset, enable.auto.commit).
+   |--> RabbitMQ
+   |    *   Key Concepts: Exchanges (direct, topic, fanout, headers), Queues, Bindings, AMQP protocol
+   |    *   Config: Exchange types, queue durability, message persistence, acknowledgements (manual vs. auto)
+   |    *   Dev Resp: Designing exchange/queue topology, configuring message properties (e.g., delivery mode), setting up publisher confirms and consumer acks.
+   |--> AWS SNS+SQS, Google Pub/Sub, Azure Event Hubs
    |
    v
-📥 EVENT CONSUMERS
-   |--> Kafka Listener → Service Logic → DB Write / Notification
-   |--> Idempotent processing using deduplication ID
-   |--> Dead Letter Queue for failure handling
+📥 EVENT CONSUMERS (e.g., @KafkaListener, @RabbitListener)
+   |--> Idempotency
+   |    *   Techniques: Using unique message ID / business key for deduplication (check if already processed, e.g., in DB or Redis before processing), optimistic locking on state change.
+   |    *   Dev Resp: Implementing idempotency logic, managing processed message IDs.
+   |--> Dead Letter Queues (DLQs) / Topics
+   |    *   Config: Max retry attempts, backoff policy for retries (e.g., `SeekToCurrentErrorHandler` in Kafka, `RepublishMessageRecoverer` for RabbitMQ)
+   |    *   Dev Resp: Configuring DLQ listeners, monitoring DLQs, strategy for reprocessing/discarding messages from DLQ.
+   |--> Concurrency, Error Handling, Deserialization
+   |    *   Config: Listener concurrency (`spring.kafka.listener.concurrency`), error handlers (`ConsumerAwareErrorHandler`), deserialization trusted packages.
+   |    *   Dev Resp: Handling deserialization errors, poison pills, managing offsets for retries.
    |
    v
 🔂 CHOREOGRAPHY VS ORCHESTRATION
-   |--> Choreography: Event-based coordination
-   |--> Orchestration: Central saga controller
+   |--> Choreography: Event-based coordination (services react to each other's events)
+   |--> Orchestration: Central saga controller (e.g., using Spring Statemachine or a dedicated orchestrator service) manages sequence of operations and compensations.
 
 🧩 CROSS-CUTTING CONCERNS (Applied Globally)
 🧾 Logging
-   - SLF4J + Logback
-   - Logstash → Elasticsearch → Kibana (ELK Stack)
-   - Correlation IDs (MDC context)
+   |--> Structured Logging
+   |    *   Tooling: SLF4J + Logback/Log4j2 with JSON encoder (e.g., `logstash-logback-encoder`)
+   |    *   Dev Resp: Writing logs in key-value pairs, avoiding sensitive data in logs (or masking it).
+   |--> MDC (Mapped Diagnostic Context)
+   |    *   Tooling: SLF4J MDC API
+   |    *   Dev Resp: Populating MDC with correlation IDs, user IDs, request details for better log tracing and filtering.
+   |--> Log Aggregation: ELK Stack (Elasticsearch, Logstash, Kibana), Splunk, Grafana Loki
+   |    *   Dev Resp: Ensuring logs are correctly shipped and searchable, creating dashboards for log analysis.
 
 📊 Monitoring & Metrics
-   - Prometheus: Metric scraping
-   - Spring Boot Actuator (/metrics, /health)
-   - Grafana: Dashboards and alerts
+   |--> Micrometer (Vendor-neutral application metrics facade)
+   |    *   Tooling: Integrated with Spring Boot Actuator. Backends: Prometheus, Graphite, Datadog.
+   |    *   Dev Resp: Adding custom metrics (`Counter`, `Timer`, `Gauge`) for business KPIs, queue sizes, error rates.
+   |--> Spring Boot Actuator (`/metrics`, `/health`, `/info`, `/env`, `/loggers`)
+   |    *   Config: Exposing relevant endpoints, securing sensitive endpoints.
+   |    *   Dev Resp: Implementing custom health indicators (`HealthIndicator`), providing build info via `/info`.
+   |--> Prometheus: Metric scraping, PromQL for querying.
+   |--> Grafana: Dashboards and alerting based on Prometheus metrics.
+   |    *   Dev Resp: Creating dashboards to visualize metrics, setting up alert rules for critical conditions.
 
 📡 Tracing
-   - Spring Cloud Sleuth
-   - Zipkin / Jaeger: Trace end-to-end request across services
+   |--> OpenTelemetry (Vendor-neutral tracing and metrics API/SDK) - preferred over Sleuth for new projects.
+   |    *   Tooling: OpenTelemetry SDK, auto-instrumentation agents (e.g., OpenTelemetry Java Agent), exporters for Jaeger/Zipkin/OTLP.
+   |    *   Dev Resp: Adding custom spans (`@WithSpan` or `Tracer.spanBuilder()`) for fine-grained tracing, propagating context manually if needed, ensuring trace IDs propagate across services and message queues.
+   |--> Spring Cloud Sleuth (older, but still common, provides abstraction over Brave/Zipkin)
+   |--> Jaeger / Zipkin: Distributed tracing systems for visualizing traces.
+   |    *   Dev Resp: Analyzing traces to debug latency issues, identifying bottlenecks.
+
+🗃 Caching
+   |--> Strategies:
+   |    *   Cache-aside (Read-through, Write-through, Write-behind also exist but cache-aside is common for external caches)
+   |    *   Dev Resp: Deciding what to cache, cache key design, handling cache invalidation/updates.
+   |--> Tooling:
+   |    *   In-memory: Spring Cache with Caffeine, Guava Cache, EhCache
+   |        *   Config: Max size, TTL (Time To Live), TTI (Time To Idle), eviction policies (LRU, LFU).
+   |        *   Dev Resp: Annotating methods with `@Cacheable`, `@CachePut`, `@CacheEvict`, configuring cache managers.
+   |    *   Distributed: Redis, Memcached
+   |        *   Tooling: Spring Data Redis, Jedis/Lettuce clients.
+   |        *   Config: Connection details, serialization (JSON, Kryo), cluster/sentinel setup.
+   |        *   Dev Resp: Managing cache consistency across instances, handling network issues with cache.
+   |--> Cache Invalidation: TTL-based, explicit eviction on data change, event-driven invalidation.
 
 🔑 Secrets & Config Management
-   - Spring Cloud Config / Consul / AWS Parameter Store
-   - Secrets Manager / HashiCorp Vault
+   |--> Spring Cloud Config Server / Consul / AWS Parameter Store / Azure App Configuration
+   |    *   Config: Git backend for Config Server, bootstrap configuration for clients.
+   |    *   Dev Resp: Externalizing configuration, managing profiles (dev, test, prod), dynamic config refresh (`@RefreshScope`).
+   |--> HashiCorp Vault / AWS Secrets Manager / Azure Key Vault for sensitive data.
+   |    *   Dev Resp: Securely accessing secrets, integrating with Spring Cloud Vault.
 
 🧪 Testing
-   - Unit: JUnit5, Mockito, AssertJ
-   - Integration: Testcontainers, RestAssured, WireMock
-   - Contract: Pact.io
-   - E2E: Selenium, Cypress
+   |--> Unit Testing
+   |    *   Tooling: JUnit5, Mockito, AssertJ, Hamcrest
+   |    *   Dev Resp: Writing tests for individual classes/methods, mocking dependencies, aiming for high code coverage, testing edge cases and business logic.
+   |--> Integration Testing
+   |    *   Tooling: Testcontainers (for DBs, Kafka, Redis etc.), RestAssured/WebTestClient (for API tests), WireMock/Hoverfly (for mocking external services), Spring Boot (`@SpringBootTest`).
+   |    *   Dev Resp: Testing interactions between components (e.g., service to repository, controller to service), API contract testing, testing against real DB/broker instances via Testcontainers.
+   |--> Contract Testing
+   |    *   Tooling: Pact.io, Spring Cloud Contract
+   |    *   Dev Resp: Defining consumer-driven contracts, ensuring API compatibility between services without full E2E setup.
+   |--> E2E Testing (less focus for backend devs, usually separate QA team)
+   |    *   Tooling: Selenium, Cypress, Playwright
 
-🧯 Resilience & Fault Tolerance (Resilience4j)
-   - @Retry: For transient faults
-   - @CircuitBreaker: Prevent cascading failures
-   - @RateLimiter: Control usage per client
-   - @Bulkhead: Resource pool isolation
-   - @TimeLimiter: Timeout wrapper
-   - Fallback Methods: Graceful degradation
+🧯 Resilience & Fault Tolerance
+   |--> Resilience4j (preferred over Hystrix)
+   |    *   @Retry: For transient faults (e.g., temporary network glitch)
+   |        *   Practical Considerations: Max attempts, backoff strategy (exponential, random), retryable exceptions. Dev Resp: Configure appropriately for idempotent operations.
+   |    *   @CircuitBreaker: Prevent cascading failures when a downstream service is struggling.
+   |        *   Practical Considerations: Failure rate threshold, slow call rate threshold, wait duration in open state, permitted calls in half-open. Dev Resp: Monitor state changes, use with fallbacks.
+   |    *   @RateLimiter: Control usage per client/API.
+   |        *   Practical Considerations: Limit refresh period, limit for period. Dev Resp: Define fair usage policies.
+   |    *   @Bulkhead: Isolate resources (thread pools, semaphores) for different calls.
+   |        *   Practical Considerations: Max concurrent calls, max wait duration. Dev Resp: Prevent one slow service from exhausting all resources.
+   |    *   @TimeLimiter: Timeout wrapper for calls.
+   |        *   Practical Considerations: Timeout duration, cancel running future. Dev Resp: Ensure timely responses, use with `CompletableFuture`.
+   |    *   Fallback Methods: Graceful degradation when a primary path fails.
+   |        *   Dev Resp: Provide meaningful fallback responses (e.g., cached data, default value), log failures.
 
-🔒 Security
-   - JWT, OAuth2 (Authorization Code + PKCE)
-   - CSRF, CORS Handling
-   - HTTPS everywhere
-   - Data Masking for logs & APIs
-   - Encryption: AES, RSA
-   - SSO (OIDC with Okta/Keycloak/Azure AD)
+🔒 Security (overlaps with API Gateway and Security Filter Chain, but some broader points)
+   |--> JWT, OAuth2 (Authorization Code + PKCE, Client Credentials)
+   |--> CSRF protection (e.g., Spring Security's `CsrfFilter` for stateful web apps, not typically needed for stateless REST APIs using tokens in headers)
+   |--> CORS Handling (globally via `WebMvcConfigurer` or per-controller/method with `@CrossOrigin`)
+   |--> HTTPS everywhere (enforced at LB/Gateway level, internal traffic can be HTTP if network is secure)
+   |--> Data Masking for logs & APIs (custom serializers, log filters)
+   |--> Encryption: AES for data at rest, RSA for key exchange. TLS for data in transit.
+   |--> SSO (OIDC with Okta/Keycloak/Azure AD, SAML for enterprise integration)
+   |--> Principle of Least Privilege for service accounts and user roles.
+   |--> Regular security audits and penetration testing.
 
-📦 Packaging & Deployment
-   - Docker + Docker Compose
-   - Kubernetes (Helm, Kustomize)
-   - StatefulSets, CronJobs
-   - Pod Autoscaler, Node Affinity
-   - Blue-Green / Canary Deployments
-   - Service Mesh (Istio/Linkerd)
+📦 Packaging & Deployment (Developer touchpoints)
+   |--> Docker + Docker Compose (for local development environments)
+   |    *   Dev Resp: Writing Dockerfiles, managing multi-container local setups.
+   |--> Kubernetes (Helm, Kustomize for manifests)
+   |    *   Dev Resp: Understanding basic K8s concepts (Pod, Service, Deployment, ConfigMap, Secret), creating Helm charts or Kustomize overlays for their services.
+   |--> Blue-Green / Canary Deployments (developer awareness of strategies)
+   |--> Service Mesh (Istio/Linkerd - developers might configure retries, timeouts at mesh level via CRDs)
 
-🚀 CI/CD Pipeline
-   - GitHub Actions / Jenkins / GitLab CI
-   - Static Code Analysis: SonarQube, Checkstyle
-   - Unit + Integration Testing
-   - Docker Image Push → Container Registry (ECR, DockerHub)
-   - K8s Deployment using Helm
-   - Canary rollout using ArgoCD/Spinnaker
+🚀 CI/CD Pipeline (Developer touchpoints)
+   |--> GitHub Actions / Jenkins / GitLab CI
+   |--> Static Code Analysis
+   |    *   Tooling: SonarQube, Checkstyle, PMD, SpotBugs
+   |    *   Dev Resp: Integrating into build, fixing reported issues, maintaining quality gates.
+   |--> Unit + Integration Testing Stages
+   |    *   Dev Resp: Ensuring tests run reliably in pipeline, analyzing test failures.
+   |--> Docker Image Push → Container Registry (ECR, DockerHub, GCR)
+   |--> K8s Deployment (e.g., via Helm, ArgoCD)
+   |--> Automated Security Scans (e.g., trivy for images, OWASP ZAP for DAST)
 
 🧠 Dev Best Practices
-   - 12-Factor App Design
-   - Domain-Driven Design (DDD)
-   - API Design First (OpenAPI/Swagger)
-   - Clean Architecture / Hexagonal Architecture
-   - Layered Logging & Alerting Strategy
-   - Feature Flags (Unleash, FF4J)
+   |--> 12-Factor App Design (https://12factor.net/)
+   |--> Domain-Driven Design (DDD): Entities, Aggregates, Value Objects, Bounded Contexts.
+   |--> API Design First (OpenAPI/Swagger for REST, Schema-first for GraphQL)
+   |--> Clean Architecture / Hexagonal Architecture (Ports and Adapters)
+   |--> Layered Logging & Alerting Strategy (different severity for different issues)
+   |--> Feature Flags (Unleash, FF4J, LaunchDarkly)
+   |    *   Dev Resp: Implementing feature toggles for new features, A/B testing, dark launches.
 ```
 
 ---
